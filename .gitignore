@@ -1,0 +1,5 @@
+*.app/
+mac/icon-1024.png
+mac/player.html
+.DS_Store
+*.zip

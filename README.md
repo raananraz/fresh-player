@@ -19,7 +19,14 @@ A native macOS music player for MP3 and WAV files that lives in your menu bar, w
 - A playlist where you can drop in files and remove songs
 - Open MP3 and WAV files straight from Finder
 
-## Build
+## Download
+
+Grab `Fresh-Music-Player.zip` from the [latest release](https://github.com/raananraz/fresh-player/releases/latest), unzip it, and drag **Fresh Music Player** into your Applications folder.
+
+- It's built for Apple Silicon Macs (M1 or newer) running macOS 11 or later.
+- The app isn't signed with an Apple developer certificate, so the first time you open it, right-click the app and choose **Open**, then confirm. If macOS still blocks it, run `xattr -dr com.apple.quarantine "/Applications/Fresh Music Player.app"` in Terminal.
+
+## Build from source
 
 You need macOS 11 or later and the Xcode Command Line Tools (`xcode-select --install`).
 

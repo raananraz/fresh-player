@@ -2,6 +2,13 @@
 
 A native macOS music player for MP3 and WAV files that lives in your menu bar, with live audio visualizations.
 
+![Fresh Music Player with the black theme and the Radial visualization](screenshots/black.svg)
+
+<p>
+  <img src="screenshots/light.svg" alt="Light theme with the Spectrum visualization" width="64%">
+  <img src="screenshots/compact.svg" alt="Menu bar mini player with the Ribbons visualization" width="34%">
+</p>
+
 ## Features
 
 - A menu bar icon that opens a compact mini player, plus a Dock icon and a full window you can drag around

@@ -45,6 +45,7 @@ To install it, copy `mac/Fresh Music Player.app` into `/Applications`.
 | Space | Play or pause |
 | N / B | Next or previous track |
 | Left / Right | Seek 5 seconds (30 with Shift) |
+| J / L | Skip back or forward 15 seconds |
 | Up / Down | Volume |
 | 1 to 6 | Visualization mode |
 | P | Next palette |

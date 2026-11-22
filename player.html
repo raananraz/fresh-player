@@ -80,6 +80,8 @@ body.compact .trk .rm{opacity:.65}
 .ib{border:0;background:none;cursor:pointer;color:var(--ink);width:38px;height:38px;border-radius:50%;display:grid;place-items:center;transition:background .15s,transform .15s}
 .ib:hover{background:rgba(43,40,64,.06)}
 .ib svg{width:20px;height:20px;fill:currentColor}
+.ib.skip .arc{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.ib.skip text{fill:currentColor;stroke:none;font-size:7.6px;font-weight:800;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;letter-spacing:-.04em}
 .play{width:48px;height:48px;background:var(--grad);color:#fff;box-shadow:0 6px 18px color-mix(in srgb,var(--a2) 40%,transparent)}
 .play:hover{background:var(--grad);transform:scale(1.06)}
 .seek{display:flex;align-items:center;gap:10px;width:100%;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
@@ -190,8 +192,10 @@ body.compact .right{grid-area:right;gap:2px;justify-content:flex-end}
 body.compact .right .ib{width:30px;height:30px}
 body.compact .right .ib svg{width:17px;height:17px}
 body.compact .vol{width:64px}
-body.compact .ctrls{gap:10px}
+body.compact .ctrls{gap:6px}
 body.compact .play{width:44px;height:44px}
+body.compact .skip{width:34px;height:34px}
+body.compact .skip svg{width:18px;height:18px}
 #plBtn.on{color:var(--a2);background:color-mix(in srgb,var(--a2) 12%,transparent)}
 body.compact.fs .stage{min-height:0}
 
@@ -256,7 +260,7 @@ body.dark.compact.has-tracks.pl-open #pl{background:rgba(255,255,255,.03)}
           <button class="btn ghost" id="demoBtn">Try a demo tone</button>
         </div>
       </div>
-      <div class="hint" id="hint">Space play/pause · ← → seek · 1–6 modes · P palette · T theme · R repeat · F full screen</div>
+      <div class="hint" id="hint">Space play/pause · ← → seek · J L skip 15s · 1–6 modes · P palette · T theme · R repeat · F full screen</div>
     </div>
     <aside class="playlist" id="pl"><h3>Up next <button id="addMore">+ Add</button></h3><div id="plList"></div></aside>
   </section>
@@ -265,7 +269,9 @@ body.dark.compact.has-tracks.pl-open #pl{background:rgba(255,255,255,.03)}
     <div class="center">
       <div class="ctrls">
         <button class="ib" id="prev" title="Previous"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+        <button class="ib skip" id="skipBack" title="Back 15 seconds (J)"><svg viewBox="0 0 24 24"><path class="arc" d="M7.15 7.2A6.6 6.6 0 1 1 6 15.25"/><path class="arc" d="M7.35 4.15v4.15H3.25"/><text x="12" y="15.7" text-anchor="middle">15</text></svg></button>
         <button class="ib play" id="playBtn" title="Play/Pause"><svg viewBox="0 0 24 24" id="playIco"><path d="M8 5v14l11-7z"/></svg></button>
+        <button class="ib skip" id="skipFwd" title="Forward 15 seconds (L)"><svg viewBox="0 0 24 24"><path class="arc" d="M16.85 7.2A6.6 6.6 0 1 0 18 15.25"/><path class="arc" d="M16.65 4.15v4.15H20.75"/><text x="12" y="15.7" text-anchor="middle">15</text></svg></button>
         <button class="ib" id="next" title="Next"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
         <button class="ib rpt" id="rptBtn" title="Repeat: Off (R)"><svg viewBox="0 0 24 24" id="rptIco"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg><span class="badge" id="rptBadge"></span></button>
       </div>
@@ -498,6 +504,7 @@ function applyVol(){const v=volEl.value/100;volEl.style.setProperty('--p',volEl.
 volEl.addEventListener('input',applyVol);applyVol();
 $('muteBtn').onclick=()=>{if(+volEl.value>0){lastVol=volEl.value;volEl.value=0;}else volEl.value=lastVol||80;applyVol();};
 $('playBtn').onclick=togglePlay;$('next').onclick=next;$('prev').onclick=prev;
+$('skipBack').onclick=()=>seekBy(-15);$('skipFwd').onclick=()=>seekBy(15);
 $('pick').onclick=()=>$('file').click();$('addMore').onclick=()=>$('file').click();
 $('file').addEventListener('change',e=>{addFiles(e.target.files);e.target.value='';});
 $('demoBtn').onclick=startDemo;
@@ -561,6 +568,8 @@ window.addEventListener('keydown',e=>{
   if(e.code==='Space'){e.preventDefault();togglePlay();}
   else if(e.key==='ArrowRight'){e.preventDefault();seekBy(e.shiftKey?30:5);}
   else if(e.key==='ArrowLeft'){e.preventDefault();seekBy(e.shiftKey?-30:-5);}
+  else if(e.key==='j'||e.key==='J'){e.preventDefault();seekBy(-15);}
+  else if(e.key==='l'||e.key==='L'){e.preventDefault();seekBy(15);}
   else if(e.key==='ArrowUp'){e.preventDefault();volEl.value=Math.min(100,+volEl.value+5);applyVol();}
   else if(e.key==='ArrowDown'){e.preventDefault();volEl.value=Math.max(0,+volEl.value-5);applyVol();}
   else if(/^[1-6]$/.test(e.key))setMode(+e.key-1);
@@ -609,7 +618,7 @@ function postState(){
 }
 let visible=true;
 function setVisible(v){v=!!v;if(v===visible)return;visible=v;if(v){resize();kick();}}
-window.playerAPI={togglePlay,play,pause,next,prev,setMode:n=>setMode(n-1),setPalette:n=>setPalette(n-1),setTheme,toggleTheme,getState,
+window.playerAPI={togglePlay,play,pause,next,prev,skipBack:()=>seekBy(-15),skipForward:()=>seekBy(15),setMode:n=>setMode(n-1),setPalette:n=>setPalette(n-1),setTheme,toggleTheme,getState,
   openFiles:()=>$('file').click(),startDemo,seek:seekBy,addFiles:addFileURLs,setRepeat,cycleRepeat,toggleFullscreen,setFullscreen,setLayout,togglePlaylist,getLayout:()=>layout,loadTrack:(i,autoplay,t)=>{if(i>=0&&i<tracks.length){load(i,!!autoplay);if(t>1)audio.addEventListener('loadedmetadata',()=>{try{audio.currentTime=Math.min(t,(audio.duration||t+1)-0.5);}catch(e){}},{once:true});}},setVisible,refresh:()=>refresh(),debugStats:()=>debugStats(),isVisible:()=>visible&&!document.hidden};
 
 /* ---------- Canvas & viz ---------- */

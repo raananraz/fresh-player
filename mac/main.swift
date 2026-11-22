@@ -990,6 +990,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     @objc func togglePlay() { callJS("togglePlay()") }
     @objc func nextTrack()  { callJS("next()") }
     @objc func prevTrack()  { callJS("prev()") }
+    @objc func skipBack15() { callJS("skipBack()") }
+    @objc func skipForward15() { callJS("skipForward()") }
     @objc func openFiles()  {
         if !window.isVisible && !popover.isShown { showPanel() }
         callJS("openFiles()")
@@ -1074,6 +1076,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         statusMenu.addItem(item(isPlaying ? "Pause" : "Play", #selector(togglePlay)))
         statusMenu.addItem(item("Next", #selector(nextTrack)))
         statusMenu.addItem(item("Previous", #selector(prevTrack)))
+        statusMenu.addItem(item("Skip Back 15s", #selector(skipBack15), "j", mods: []))
+        statusMenu.addItem(item("Skip Forward 15s", #selector(skipForward15), "l", mods: []))
         statusMenu.addItem(.separator())
 
         let vizItem = NSMenuItem(title: "Visualization", action: nil, keyEquivalent: "")
@@ -1151,6 +1155,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         let ctl = NSMenu(title: "Controls")
         ctl.addItem(item("Next", #selector(nextTrack), String(UnicodeScalar(NSRightArrowFunctionKey)!)))
         ctl.addItem(item("Previous", #selector(prevTrack), String(UnicodeScalar(NSLeftArrowFunctionKey)!)))
+        ctl.addItem(item("Skip Back 15s", #selector(skipBack15), "j", mods: []))
+        ctl.addItem(item("Skip Forward 15s", #selector(skipForward15), "l", mods: []))
         ctl.addItem(item("Cycle Repeat", #selector(cycleRepeat), "r"))
         ctlItem.submenu = ctl
 

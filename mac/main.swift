@@ -1297,6 +1297,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         statusMenu.addItem(themeItem)
 
         let outItem = NSMenuItem(title: "Sound Output", action: nil, keyEquivalent: "")
+        if let img = NSImage(systemSymbolName: "airplayaudio", accessibilityDescription: "Sound Output") {
+            img.isTemplate = true
+            outItem.image = img
+        }
         let outMenu = NSMenu(title: "Sound Output")
         let pref = AudioOutputs.preferredUID
         let sysItem = item("System Default", #selector(selectOutput(_:)), mods: [])

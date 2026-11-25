@@ -202,7 +202,8 @@ body.compact.fs .stage{min-height:0}
 body.native .out.has-devs{display:block}
 .outBtn{display:flex;align-items:center;gap:5px;max-width:190px;height:30px;padding:0 8px 0 7px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);font:inherit;font-size:12px;font-weight:550;cursor:pointer;box-shadow:var(--shadow)}
 .outBtn:hover{color:var(--ink)}
-.outBtn svg.spk{width:15px;height:15px;fill:currentColor;flex:none}
+.outBtn svg.route{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-linejoin:round}
+.outBtn svg.route .tri{fill:currentColor;stroke:none}
 .outBtn svg.chev{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;flex:none}
 .outBtn .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .outMenu{display:none;position:absolute;right:0;bottom:calc(100% + 6px);min-width:230px;max-width:300px;max-height:260px;overflow:auto;background:rgba(255,255,255,.96);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:6px;z-index:30}
@@ -216,7 +217,7 @@ body.native .out.has-devs{display:block}
 .outNote{font-size:10px;color:var(--muted);padding:4px 8px 6px;line-height:1.35}
 body.compact .outBtn{width:30px;height:30px;max-width:30px;padding:0;justify-content:center;border-radius:50%;box-shadow:none;background:none}
 body.compact .outBtn .nm,body.compact .outBtn .chev{display:none}
-body.compact .outBtn svg.spk{width:17px;height:17px}
+body.compact .outBtn svg.route{width:17px;height:17px}
 
 
 /* ---------- Black theme (T) ---------- */
@@ -303,7 +304,7 @@ body.dark .outBtn:hover{background:rgba(255,255,255,.08)}
       <button class="ib only-compact" id="plBtn" title="Show playlist"><svg viewBox="0 0 24 24"><path d="M3 6h12v2H3zm0 5h12v2H3zm0 5h8v2H3zm14-5v6.18A3 3 0 1 0 19 20v-7h3v-2h-5z"/></svg></button>
       <button class="ib" id="fsBtn" title="Full-screen visualization (F)"><svg viewBox="0 0 24 24"><path d="M5 5h5v2H7v3H5V5zm9 0h5v5h-2V7h-3V5zM5 14h2v3h3v2H5v-5zm12 3v-3h2v5h-5v-2h3z"/></svg></button>
       <div class="out" id="outWrap">
-        <button class="outBtn" id="outBtn" type="button" aria-haspopup="listbox" title="Sound output — changes this Mac's sound output"><svg class="spk" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg><span class="nm" id="outName">System Default</span><svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+        <button class="outBtn" id="outBtn" type="button" aria-haspopup="listbox" title="Sound output — changes this Mac's sound output"><svg class="route" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" d="M7.8 17H6.25A2.25 2.25 0 0 1 4 14.75v-8.5A2.25 2.25 0 0 1 6.25 4h11.5A2.25 2.25 0 0 1 20 6.25v8.5A2.25 2.25 0 0 1 17.75 17H16.2"/><path class="tri" fill="currentColor" d="M12 13.2l5.35 7.5H6.65z"/></svg><span class="nm" id="outName">System Default</span><svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
         <div class="outMenu" id="outMenu" role="listbox"></div>
       </div>
       <button class="ib" id="muteBtn" title="Mute"><svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg></button>

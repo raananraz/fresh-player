@@ -34,8 +34,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.raanan.freshmusicplayer</string>
   <key>CFBundleExecutable</key><string>$NAME</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.2</string>
-  <key>CFBundleVersion</key><string>14</string>
+  <key>CFBundleShortVersionString</key><string>2.3</string>
+  <key>CFBundleVersion</key><string>15</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
   <key>NSHighResolutionCapable</key><true/>

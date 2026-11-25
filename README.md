@@ -14,11 +14,12 @@ A native macOS music player for MP3 and WAV files that lives in your menu bar, w
 - A menu bar icon that opens a compact mini player, plus a Dock icon and a full window you can drag around
 - Six visualization modes: Spectrum, Waveform, Radial, Particles, Ribbons and Matrix
 - Four color palettes (Blossom, Mint, Sunset, Ocean) and a light or black theme
+- The last visualization mode and color palette are remembered when you quit and reopen the app
 - Full screen visualization
 - Repeat off, repeat once, or repeat forever
 - A playlist where you can drop in files and remove songs
 - Open MP3 and WAV files straight from Finder
-- A sound output picker in the player and the menu bar (this changes the Mac’s default sound output)
+- A sound output picker in the player and the menu bar that routes only this app’s audio, without changing the Mac’s default output
 
 ## Download
 
@@ -58,5 +59,6 @@ To install it, copy `mac/Fresh Music Player.app` into `/Applications`.
 
 - `player.html` is the player UI, audio engine and visualizations (Web Audio and canvas).
 - `mac/main.swift` is the native AppKit shell: the menu bar item, popover, window and file handling.
+- `mac/FMPEngine.swift` plays audio with AVAudioEngine and routes it to the chosen output device for this app only.
 - `mac/build.sh` compiles with `swiftc` and assembles the `.app` bundle.
 - `mac/icon.svg` is the app icon, which the build script renders to PNG.

@@ -197,9 +197,19 @@ final class LocalFileSchemeHandler: NSObject, WKURLSchemeHandler {
     private var allowedPaths = Set<String>()            // main-thread only
     private let io = DispatchQueue(label: "fmp.file-io", qos: .userInitiated, attributes: .concurrent)
 
+    static func savedVizMode() -> Int {
+        let n = UserDefaults.standard.object(forKey: "FMPVizMode") as? Int ?? 1
+        return min(6, max(1, n))
+    }
+    static func savedPalette() -> Int {
+        let n = UserDefaults.standard.object(forKey: "FMPPalette") as? Int ?? 1
+        return min(4, max(1, n))
+    }
     static func pageURL() -> URL {
         let t = UserDefaults.standard.string(forKey: "FMPTheme") == "black" ? "black" : "light"
-        return URL(string: "\(scheme)://\(host)/player.html?theme=\(t)")!
+        let mode = savedVizMode()
+        let pal = savedPalette()
+        return URL(string: "\(scheme)://\(host)/player.html?theme=\(t)&mode=\(mode)&palette=\(pal)")!
     }
 
     /// Allow-list a local file and return the URL the page should use for it.
@@ -211,6 +221,16 @@ final class LocalFileSchemeHandler: NSObject, WKURLSchemeHandler {
         c.host = Self.host
         c.path = "/file" + path
         return c.url
+    }
+
+    func fileURL(fromPageURL string: String) -> URL? {
+        guard let url = URL(string: string) else { return nil }
+        if url.isFileURL { return url.standardizedFileURL }
+        guard url.scheme == Self.scheme else { return nil }
+        let path = url.path
+        guard path.hasPrefix("/file/") else { return nil }
+        let p = String(path.dropFirst("/file".count))
+        return URL(fileURLWithPath: p)
     }
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
@@ -358,15 +378,20 @@ final class LocalFileSchemeHandler: NSObject, WKURLSchemeHandler {
 }
 
 // MARK: Audio output devices (CoreAudio)
-// WKWebView has no reliable setSinkId, so the picker changes the Mac's default
-// output device (system-wide) and remembers the choice in UserDefaults.
+// Device list and UserDefaults preference only. Playback is routed per-app by
+// FMPEngine setting kAudioOutputUnitProperty_CurrentDevice on its output unit.
+// Never write kAudioHardwarePropertyDefaultOutputDevice.
 enum AudioOutputs {
     static let prefKey = "FMPOutputDeviceUID"
     private static let element = AudioObjectPropertyElement(0)
 
     static var preferredUID: String {
         get { UserDefaults.standard.string(forKey: prefKey) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: prefKey) }
+        set {
+            if newValue.isEmpty { UserDefaults.standard.removeObject(forKey: prefKey) }
+            else { UserDefaults.standard.set(newValue, forKey: prefKey) }
+            UserDefaults.standard.synchronize()
+        }
     }
 
     private static func address(_ selector: AudioObjectPropertySelector,
@@ -380,15 +405,6 @@ enum AudioOutputs {
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         let err = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
         return err == noErr ? id : 0
-    }
-
-    @discardableResult
-    static func setDefaultDeviceID(_ id: AudioDeviceID) -> Bool {
-        guard id != 0 else { return false }
-        var addr = address(kAudioHardwarePropertyDefaultOutputDevice)
-        var dev = id
-        let err = AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, UInt32(MemoryLayout<AudioDeviceID>.size), &dev)
-        return err == noErr
     }
 
     static func stringProperty(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
@@ -444,35 +460,32 @@ enum AudioOutputs {
             if boolProperty(id, kAudioDevicePropertyIsHidden) == true { continue }
             if boolProperty(id, kAudioDevicePropertyDeviceIsAlive) == false { continue }
             guard let uid = stringProperty(id, kAudioDevicePropertyDeviceUID), !uid.isEmpty else { continue }
+            // Hide per-process aggregates AVAudioEngine/HAL may create; they are not user devices.
+            if uid.hasPrefix("CADefaultDeviceAggregate") || uid.hasPrefix("VPAUAggregate") { continue }
             let name = stringProperty(id, kAudioObjectPropertyName) ?? uid
+            if name.hasPrefix("CADefaultDeviceAggregate") { continue }
             out.append(Device(id: id, uid: uid, name: name, isDefault: id == def))
         }
         out.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         return out
     }
 
-    /// Re-apply a remembered device if it is still present. If it disappeared, leave the
-    /// current macOS default alone (the preference is kept so the device can return).
-    static func applyPreferred() {
+    /// The preferred UID, or "" if it is empty or the device is gone (fall back to system default).
+    static func effectiveUID() -> String {
         let pref = preferredUID
-        guard !pref.isEmpty else { return }
-        if let dev = list().first(where: { $0.uid == pref }) {
-            if !dev.isDefault { _ = setDefaultDeviceID(dev.id) }
-        }
+        if !pref.isEmpty, list().contains(where: { $0.uid == pref }) { return pref }
+        return ""
     }
 
     @discardableResult
     static func select(uid: String) -> Bool {
         preferredUID = uid
-        applyPreferred()
         return uid.isEmpty || list().contains(where: { $0.uid == uid })
     }
 
     static func payload() -> [String: Any] {
-        applyPreferred()
         let devices = list()
-        let pref = preferredUID
-        let selected = (!pref.isEmpty && devices.contains(where: { $0.uid == pref })) ? pref : ""
+        let selected = effectiveUID()
         return [
             "selected": selected,
             "devices": devices.map { ["uid": $0.uid, "name": $0.name, "isDefault": $0.isDefault] as [String: Any] }
@@ -483,7 +496,10 @@ enum AudioOutputs {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                          WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate, NSMenuDelegate, NSPopoverDelegate {
     var window: NSWindow!
-    var webView: WKWebView!          // ONE web view, moved between the menu-bar panel and the main window
+    var webView: FMPWebView!         // ONE web view, moved between the menu-bar panel and the main window
+    let audioEngine = FMPEngine()
+    var lastAnalyserEnergy = 0
+    var routeTestScheduled = false
     var windowContainer: NSView!
     var dragStrip: DragStripView!
     // Menu-bar panel (popover anchored under the status item)
@@ -499,7 +515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     var openedFiles: [URL] = []
     var currentSrc = ""
     var currentTime = 0.0
-    var currentPalette = 1
+    var currentPalette = LocalFileSchemeHandler.savedPalette()
     var currentTheme = UserDefaults.standard.string(forKey: "FMPTheme") == "black" ? "black" : "light"
     var restoreAfterCrash = false
     var lastButtonSymbol = ""
@@ -513,7 +529,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     // Player state mirrored from JS
     var trackName = ""
     var isPlaying = false
-    var currentMode = 1
+    var currentMode = LocalFileSchemeHandler.savedVizMode()
     var repeatMode = "off"
     var isFullScreen = false
     var modeNames = ["Spectrum", "Waveform", "Radial", "Particles", "Ribbons", "Matrix"]
@@ -540,6 +556,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         buildStatusItem()
         startAudioOutputMonitor()
         startHealTimer()
+        if CommandLine.arguments.contains("--route-test") {
+            routeTestScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.runRouteTest() }
+        }
+        if CommandLine.arguments.contains("--viz-test") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in self?.runVizTest() }
+        }
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] n in
             guard let self = self, let w = n.object as? NSWindow else { return }
             if w === self.window || w === self.popover.contentViewController?.view.window { self.refreshSurface("didBecomeKey") }
@@ -552,8 +575,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         NotificationCenter.default.addObserver(forName: NSApplication.didHideNotification, object: nil, queue: .main) { [weak self] _ in self?.updateVisibility() }
         NotificationCenter.default.addObserver(forName: NSApplication.didUnhideNotification, object: nil, queue: .main) { [weak self] _ in self?.updateVisibility() }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            AudioOutputs.applyPreferred()
-            self?.callJS("resumeAudio()")
+            self?.audioEngine.applyOutputDevice()
+            self?.audioEngine.recover(why: "wake")
             self?.pushOutputDevices()
         }
         // Default surface: the compact panel under the menu-bar icon. Wait a beat so the status
@@ -582,10 +605,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         config.setURLSchemeHandler(schemeHandler, forURLScheme: LocalFileSchemeHandler.scheme)
 
-        webView = WKWebView(frame: .zero, configuration: config)
+        webView = FMPWebView(frame: .zero, configuration: config)
         webView.uiDelegate = self
         webView.navigationDelegate = self
         webView.setValue(false, forKey: "drawsBackground")
+        webView.onFileDrop = { [weak self] urls in self?.enqueueOpen(urls) }
+        setupAudioEngine()
         // WebKit stops painting a page whose window it thinks is occluded. Occlusion of popover /
         // re-parented windows is unreliable (esp. after sleep/wake); we tell the page when to draw.
         // (Private occlusion toggle removed in 1.8.1: its KVC key doesn't exist and threw at launch.)
@@ -755,7 +780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         refreshSurface("heal-\(why)")
     }
     func describeHB() -> String {
-        let keys = ["age", "vis", "doc", "w", "h", "layout", "t", "playing"]
+        let keys = ["age", "vis", "doc", "w", "h", "layout", "t", "playing", "mode", "modeName", "palette"]
         return keys.compactMap { k in lastHB[k].map { "\(k)=\($0)" } }.joined(separator: " ")
     }
     /// Keep the app from being App-Napped while audio plays.
@@ -1101,17 +1126,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             HangWatchdog.shared.viewLog("audio \(ev) ctx=\(st) playing=\(body["playing"] ?? "") t=\(body["t"] ?? "") \(extra)")
             return
         }
+        if type == "engine" {
+            handleEngineMessage(body)
+            return
+        }
         if type == "setOutput" {
-            let uid = body["uid"] as? String ?? ""
-            _ = AudioOutputs.select(uid: uid)
-            HangWatchdog.shared.viewLog("output device -> \(uid.isEmpty ? "system default" : uid)")
-            pushOutputDevices()
-            refreshMenus()
+            applyOutputUID(body["uid"] as? String ?? "")
             return
         }
         if type == "ready" {
             pageReady = true
             lastVisibleSent = nil
+            HangWatchdog.shared.viewLog("viz restore mode=\(currentMode) palette=\(currentPalette) theme=\(currentTheme)")
             callJS("setLayout('\(currentLayout)')")
             updateVisibility()
             lastHeartbeat = Date()
@@ -1121,10 +1147,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
         if let t = body["track"] as? String { trackName = t }
         if let p = body["playing"] as? Bool { isPlaying = p; updatePlayActivity() }
-        if let m = body["mode"] as? NSNumber { currentMode = m.intValue }
+        if let m = body["mode"] as? NSNumber {
+            currentMode = m.intValue
+            UserDefaults.standard.set(currentMode, forKey: "FMPVizMode")
+        }
         if let r = body["repeat"] as? String { repeatMode = r }
         if let names = body["modes"] as? [String], !names.isEmpty { modeNames = names }
-        if let pl = body["palette"] as? NSNumber { currentPalette = pl.intValue }
+        if let pl = body["palette"] as? NSNumber {
+            currentPalette = pl.intValue
+            UserDefaults.standard.set(currentPalette, forKey: "FMPPalette")
+        }
         if let th = body["theme"] as? String, th != currentTheme { currentTheme = th; UserDefaults.standard.set(th, forKey: "FMPTheme"); applyTheme() }
         if let src = body["src"] as? String { currentSrc = src }
         refreshMenus()
@@ -1170,8 +1202,100 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
     @objc func toggleTheme() { callJS("toggleTheme()") }
 
+    func setupAudioEngine() {
+        audioEngine.onLog = { HangWatchdog.shared.viewLog("audio \($0)") }
+        audioEngine.onEnded = { [weak self] in
+            self?.callJS("onEngineEnded()")
+            self?.updateNowPlaying()
+        }
+        audioEngine.onAnalyser = { [weak self] freq, time, energy, t, d, playing in
+            guard let self = self, let wv = self.webView else { return }
+            self.lastAnalyserEnergy = energy
+            let fb = freq.base64EncodedString()
+            let tb = time.base64EncodedString()
+            wv.evaluateJavaScript("window.playerAPI&&window.playerAPI.onAnalyser('\(fb)','\(tb)',\(energy),\(t),\(d),\(playing))", completionHandler: nil)
+        }
+        audioEngine.volume = 0.8
+        audioEngine.prepare()
+        NowPlaying.setup(
+            play: { [weak self] in self?.callJS("play()") },
+            pause: { [weak self] in self?.callJS("pause()") },
+            toggle: { [weak self] in self?.callJS("togglePlay()") },
+            next: { [weak self] in self?.callJS("next()") },
+            prev: { [weak self] in self?.callJS("prev()") },
+            skip: { [weak self] s in self?.callJS(s >= 0 ? "skipForward()" : "skipBack()") },
+            seek: { [weak self] t in self?.audioEngine.seek(to: t); self?.updateNowPlaying() }
+        )
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.audioEngine.watchdog()
+            self?.updateNowPlaying()
+        }
+    }
+
+    func handleEngineMessage(_ body: [String: Any]) {
+        let action = body["action"] as? String ?? ""
+        switch action {
+        case "load":
+            let urlStr = body["url"] as? String ?? ""
+            let play = body["play"] as? Bool ?? false
+            let time = (body["time"] as? NSNumber)?.doubleValue ?? 0
+            if let url = schemeHandler.fileURL(fromPageURL: urlStr) {
+                audioEngine.loadFile(url: url, play: play, at: time)
+            } else {
+                HangWatchdog.shared.viewLog("audio engine load missing file \(urlStr)")
+            }
+            updateNowPlaying()
+        case "play":
+            audioEngine.play()
+            isPlaying = audioEngine.isPlaying
+            updatePlayActivity()
+            updateNowPlaying()
+        case "pause":
+            audioEngine.pause()
+            isPlaying = false
+            updatePlayActivity()
+            updateNowPlaying()
+        case "stop":
+            audioEngine.stop()
+            isPlaying = false
+            updatePlayActivity()
+            updateNowPlaying()
+        case "seek":
+            if let t = (body["t"] as? NSNumber)?.doubleValue { audioEngine.seek(to: t) }
+            updateNowPlaying()
+        case "seekBy":
+            if let s = (body["s"] as? NSNumber)?.doubleValue { audioEngine.seekBy(s) }
+            updateNowPlaying()
+        case "volume":
+            if let v = (body["v"] as? NSNumber)?.floatValue { audioEngine.volume = v }
+        case "demo":
+            audioEngine.startDemo()
+            isPlaying = true
+            trackName = "Demo Tone"
+            updatePlayActivity()
+            updateNowPlaying()
+        case "stopDemo":
+            if audioEngine.isDemo { audioEngine.stop() }
+            isPlaying = false
+            updatePlayActivity()
+            updateNowPlaying()
+        case "recover":
+            audioEngine.recover(why: body["why"] as? String ?? "js")
+        default:
+            HangWatchdog.shared.viewLog("audio engine unknown action \(action)")
+        }
+        isPlaying = audioEngine.isPlaying
+    }
+
+    func updateNowPlaying() {
+        NowPlaying.update(title: audioEngine.isDemo ? "Demo Tone" : trackName,
+                          elapsed: audioEngine.currentTime,
+                          duration: audioEngine.duration,
+                          playing: audioEngine.isPlaying)
+    }
+
     func startAudioOutputMonitor() {
-        AudioOutputs.applyPreferred()
+        audioEngine.applyOutputDevice()
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             DispatchQueue.main.async { self?.outputDevicesChanged() }
         }
@@ -1184,10 +1308,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     func outputDevicesChanged() {
         audioDevicePushWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            AudioOutputs.applyPreferred()
-            self?.pushOutputDevices()
-            self?.refreshMenus()
-            self?.callJS("resumeAudio()")
+            guard let self = self else { return }
+            self.audioEngine.applyOutputDevice()
+            if self.audioEngine.isPlaying { self.audioEngine.recover(why: "device-change") }
+            self.pushOutputDevices()
+            self.refreshMenus()
         }
         audioDevicePushWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
@@ -1202,12 +1327,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     @objc func selectOutput(_ sender: NSMenuItem) {
-        let uid = sender.representedObject as? String ?? ""
+        applyOutputUID(sender.representedObject as? String ?? "")
+    }
+
+    func applyOutputUID(_ uid: String) {
         _ = AudioOutputs.select(uid: uid)
-        HangWatchdog.shared.viewLog("output device -> \(uid.isEmpty ? "system default" : uid)")
+        audioEngine.applyOutputDevice()
+        if audioEngine.isPlaying { audioEngine.recover(why: "output-change") }
+        HangWatchdog.shared.viewLog("output device -> \(uid.isEmpty ? "system default" : uid) (per-app)")
         pushOutputDevices()
         refreshMenus()
-        callJS("resumeAudio()")
     }
 
 
@@ -1379,6 +1508,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         NSApp.windowsMenu = winMenu
 
         NSApp.mainMenu = main
+    }
+
+    /// One-shot verification: set a non-default visualization and palette, then persist them.
+    func runVizTest() {
+        let mode = 4, pal = 2 // Particles, Mint
+        callJS("setMode(\(mode))")
+        callJS("setPalette(\(pal))")
+        HangWatchdog.shared.viewLog("viz-test set mode=\(mode) palette=\(pal)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self = self else { return }
+            HangWatchdog.shared.viewLog("viz-test state mode=\(self.currentMode) palette=\(self.currentPalette)")
+            let path = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("FreshBuild/viz-test-state")
+            let savedMode = UserDefaults.standard.object(forKey: "FMPVizMode") as? Int ?? -1
+            let savedPal = UserDefaults.standard.object(forKey: "FMPPalette") as? Int ?? -1
+            try? "mode=\(self.currentMode) palette=\(self.currentPalette) savedMode=\(savedMode) savedPalette=\(savedPal)".write(to: path, atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// One-shot verification: switch the app to a non-default device without changing
+    /// the Mac's default output, then restore System Default.
+    func runRouteTest() {
+        let logPath = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("FreshBuild/route-test.log")
+        func w(_ s: String) {
+            HangWatchdog.shared.viewLog("route-test \(s)")
+            let line = s + "\n"
+            if let data = line.data(using: .utf8) {
+                if FileManager.default.fileExists(atPath: logPath.path), let fh = try? FileHandle(forWritingTo: logPath) {
+                    fh.seekToEndOfFile(); fh.write(data); try? fh.close()
+                } else { try? data.write(to: logPath) }
+            }
+        }
+        try? FileManager.default.removeItem(at: logPath)
+        let before = AudioOutputs.defaultDeviceID()
+        let beforeUID = AudioOutputs.stringProperty(before, kAudioDevicePropertyDeviceUID) ?? ""
+        w("before default uid=\(beforeUID) id=\(before)")
+        audioEngine.startDemo()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
+            w("playing energy=\(self.lastAnalyserEnergy) t=\(self.audioEngine.currentTime)")
+            let others = AudioOutputs.list().filter { !$0.isDefault }
+            if let other = others.first {
+                self.applyOutputUID(other.uid)
+                w("switched app to \(other.name) uid=\(other.uid)")
+                let statePath = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("FreshBuild/route-test-state")
+                try? "switched".write(to: statePath, atomically: true, encoding: .utf8)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+                    guard let self = self else { return }
+                    let mid = AudioOutputs.defaultDeviceID()
+                    let midUID = AudioOutputs.stringProperty(mid, kAudioDevicePropertyDeviceUID) ?? ""
+                    w("during default uid=\(midUID) id=\(mid) energy=\(self.lastAnalyserEnergy) unchanged=\(mid==before)")
+                    self.applyOutputUID("")
+                    self.audioEngine.pause()
+                    try? "restored".write(to: statePath, atomically: true, encoding: .utf8)
+                    let after = AudioOutputs.defaultDeviceID()
+                    let afterUID = AudioOutputs.stringProperty(after, kAudioDevicePropertyDeviceUID) ?? ""
+                    w("after default uid=\(afterUID) id=\(after) unchanged=\(after==before)")
+                }
+            } else {
+                w("no other device; energy=\(self.lastAnalyserEnergy)")
+                let statePath = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("FreshBuild/route-test-state")
+                try? "restored".write(to: statePath, atomically: true, encoding: .utf8)
+                self.audioEngine.pause()
+            }
+        }
     }
 }
 

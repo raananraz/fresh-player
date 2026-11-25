@@ -6,7 +6,7 @@ NAME="Fresh Music Player"
 APP="$NAME.app"
 rm -rf "$APP" Lumen.app
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -target "$(uname -m)-apple-macos11.0" -framework Cocoa -framework WebKit main.swift -o "$APP/Contents/MacOS/$NAME"
+swiftc -O -target "$(uname -m)-apple-macos11.0" -framework Cocoa -framework WebKit -framework CoreAudio main.swift -o "$APP/Contents/MacOS/$NAME"
 cp ../player.html "$APP/Contents/Resources/player.html"
 # App icon: icon-1024.png -> AppIcon.icns (sips + iconutil ship with macOS)
 # No PNG in a fresh checkout? Render it from icon.svg with Quick Look.
@@ -34,8 +34,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.raanan.freshmusicplayer</string>
   <key>CFBundleExecutable</key><string>$NAME</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.1</string>
-  <key>CFBundleVersion</key><string>13</string>
+  <key>CFBundleShortVersionString</key><string>2.2</string>
+  <key>CFBundleVersion</key><string>14</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
   <key>NSHighResolutionCapable</key><true/>

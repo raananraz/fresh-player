@@ -1,6 +1,7 @@
 import Cocoa
 import WebKit
 import UniformTypeIdentifiers
+import CoreAudio
 
 let kAppName = "Fresh Music Player"
 
@@ -356,6 +357,129 @@ final class LocalFileSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 }
 
+// MARK: Audio output devices (CoreAudio)
+// WKWebView has no reliable setSinkId, so the picker changes the Mac's default
+// output device (system-wide) and remembers the choice in UserDefaults.
+enum AudioOutputs {
+    static let prefKey = "FMPOutputDeviceUID"
+    private static let element = AudioObjectPropertyElement(0)
+
+    static var preferredUID: String {
+        get { UserDefaults.standard.string(forKey: prefKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: prefKey) }
+    }
+
+    private static func address(_ selector: AudioObjectPropertySelector,
+                                scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
+    }
+
+    static func defaultDeviceID() -> AudioDeviceID {
+        var addr = address(kAudioHardwarePropertyDefaultOutputDevice)
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let err = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
+        return err == noErr ? id : 0
+    }
+
+    @discardableResult
+    static func setDefaultDeviceID(_ id: AudioDeviceID) -> Bool {
+        guard id != 0 else { return false }
+        var addr = address(kAudioHardwarePropertyDefaultOutputDevice)
+        var dev = id
+        let err = AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, UInt32(MemoryLayout<AudioDeviceID>.size), &dev)
+        return err == noErr
+    }
+
+    static func stringProperty(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+        var addr = address(selector)
+        var cf: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &cf) == noErr, let cf = cf else { return nil }
+        return cf.takeRetainedValue() as String
+    }
+
+    static func boolProperty(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> Bool? {
+        var addr = address(selector)
+        var val: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &val) == noErr else { return nil }
+        return val != 0
+    }
+
+    static func hasOutput(_ id: AudioDeviceID) -> Bool {
+        var addr = address(kAudioDevicePropertyStreamConfiguration, scope: kAudioDevicePropertyScopeOutput)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return false }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return false }
+        let bufs = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
+        return bufs.reduce(0) { $0 + Int($1.mNumberChannels) } > 0
+    }
+
+    static func allDeviceIDs() -> [AudioDeviceID] {
+        var addr = address(kAudioHardwarePropertyDevices)
+        var size: UInt32 = 0
+        let sys = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(sys, &addr, 0, nil, &size) == noErr, size > 0 else { return [] }
+        let count = Int(size) / MemoryLayout<AudioDeviceID>.size
+        var ids = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(sys, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids
+    }
+
+    struct Device {
+        let id: AudioDeviceID
+        let uid: String
+        let name: String
+        let isDefault: Bool
+    }
+
+    static func list() -> [Device] {
+        let def = defaultDeviceID()
+        var out: [Device] = []
+        for id in allDeviceIDs() {
+            guard hasOutput(id) else { continue }
+            if boolProperty(id, kAudioDevicePropertyIsHidden) == true { continue }
+            if boolProperty(id, kAudioDevicePropertyDeviceIsAlive) == false { continue }
+            guard let uid = stringProperty(id, kAudioDevicePropertyDeviceUID), !uid.isEmpty else { continue }
+            let name = stringProperty(id, kAudioObjectPropertyName) ?? uid
+            out.append(Device(id: id, uid: uid, name: name, isDefault: id == def))
+        }
+        out.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        return out
+    }
+
+    /// Re-apply a remembered device if it is still present. If it disappeared, leave the
+    /// current macOS default alone (the preference is kept so the device can return).
+    static func applyPreferred() {
+        let pref = preferredUID
+        guard !pref.isEmpty else { return }
+        if let dev = list().first(where: { $0.uid == pref }) {
+            if !dev.isDefault { _ = setDefaultDeviceID(dev.id) }
+        }
+    }
+
+    @discardableResult
+    static func select(uid: String) -> Bool {
+        preferredUID = uid
+        applyPreferred()
+        return uid.isEmpty || list().contains(where: { $0.uid == uid })
+    }
+
+    static func payload() -> [String: Any] {
+        applyPreferred()
+        let devices = list()
+        let pref = preferredUID
+        let selected = (!pref.isEmpty && devices.contains(where: { $0.uid == pref })) ? pref : ""
+        return [
+            "selected": selected,
+            "devices": devices.map { ["uid": $0.uid, "name": $0.name, "isDefault": $0.isDefault] as [String: Any] }
+        ]
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                          WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate, NSMenuDelegate, NSPopoverDelegate {
     var window: NSWindow!
@@ -395,6 +519,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     var modeNames = ["Spectrum", "Waveform", "Radial", "Particles", "Ribbons", "Matrix"]
     let repeatModes: [(id: String, title: String)] = [
         ("off", "Off"), ("once", "Repeat Once"), ("one", "Repeat Track"), ("all", "Repeat All")]
+    var audioDevicesAddress = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal, mElement: 0)
+    var audioDefaultAddress = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice, mScope: kAudioObjectPropertyScopeGlobal, mElement: 0)
+    var audioDevicesListener: AudioObjectPropertyListenerBlock?
+    var audioDevicePushWork: DispatchWorkItem?
 
     func applicationWillFinishLaunching(_ note: Notification) {
         // We provide our own full-screen menu item; don't let AppKit add a duplicate.
@@ -410,6 +538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         buildPanel()
         applyTheme()
         buildStatusItem()
+        startAudioOutputMonitor()
         startHealTimer()
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] n in
             guard let self = self, let w = n.object as? NSWindow else { return }
@@ -422,6 +551,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
         NotificationCenter.default.addObserver(forName: NSApplication.didHideNotification, object: nil, queue: .main) { [weak self] _ in self?.updateVisibility() }
         NotificationCenter.default.addObserver(forName: NSApplication.didUnhideNotification, object: nil, queue: .main) { [weak self] _ in self?.updateVisibility() }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            AudioOutputs.applyPreferred()
+            self?.callJS("resumeAudio()")
+            self?.pushOutputDevices()
+        }
         // Default surface: the compact panel under the menu-bar icon. Wait a beat so the status
         // item has been laid out in the menu bar before anchoring to it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
@@ -960,6 +1094,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         HangWatchdog.shared.note("js message \(type)")
         if type == "fullscreen" { toggleFullScreenViz(); return }
         if type == "expand" { showWindow(); return }
+        if type == "audio" {
+            let ev = body["event"] as? String ?? ""
+            let st = body["state"] as? String ?? ""
+            let extra = body["extra"] as? String ?? ""
+            HangWatchdog.shared.viewLog("audio \(ev) ctx=\(st) playing=\(body["playing"] ?? "") t=\(body["t"] ?? "") \(extra)")
+            return
+        }
+        if type == "setOutput" {
+            let uid = body["uid"] as? String ?? ""
+            _ = AudioOutputs.select(uid: uid)
+            HangWatchdog.shared.viewLog("output device -> \(uid.isEmpty ? "system default" : uid)")
+            pushOutputDevices()
+            refreshMenus()
+            return
+        }
         if type == "ready" {
             pageReady = true
             lastVisibleSent = nil
@@ -967,7 +1116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             updateVisibility()
             lastHeartbeat = Date()
             if restoreAfterCrash { restoreAfterCrash = false; restorePlaylist() }
-            DispatchQueue.main.async { [weak self] in self?.refreshSurface("ready") }
+            DispatchQueue.main.async { [weak self] in self?.refreshSurface("ready"); self?.pushOutputDevices() }
             flushPendingOpen(); return
         }
         if let t = body["track"] as? String { trackName = t }
@@ -1020,6 +1169,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         popover.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     }
     @objc func toggleTheme() { callJS("toggleTheme()") }
+
+    func startAudioOutputMonitor() {
+        AudioOutputs.applyPreferred()
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async { self?.outputDevicesChanged() }
+        }
+        audioDevicesListener = block
+        let sys = AudioObjectID(kAudioObjectSystemObject)
+        _ = AudioObjectAddPropertyListenerBlock(sys, &audioDevicesAddress, nil, block)
+        _ = AudioObjectAddPropertyListenerBlock(sys, &audioDefaultAddress, nil, block)
+    }
+
+    func outputDevicesChanged() {
+        audioDevicePushWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            AudioOutputs.applyPreferred()
+            self?.pushOutputDevices()
+            self?.refreshMenus()
+            self?.callJS("resumeAudio()")
+        }
+        audioDevicePushWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
+
+    func pushOutputDevices() {
+        guard webView != nil else { return }
+        let payload = AudioOutputs.payload()
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.playerAPI && window.playerAPI.setOutputDevices(\(json))", completionHandler: nil)
+    }
+
+    @objc func selectOutput(_ sender: NSMenuItem) {
+        let uid = sender.representedObject as? String ?? ""
+        _ = AudioOutputs.select(uid: uid)
+        HangWatchdog.shared.viewLog("output device -> \(uid.isEmpty ? "system default" : uid)")
+        pushOutputDevices()
+        refreshMenus()
+        callJS("resumeAudio()")
+    }
+
 
     /// Cheap: the status menu itself is rebuilt lazily right before it opens (menuNeedsUpdate /
     /// showStatusMenu), never while it's being tracked.
@@ -1105,6 +1295,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         let themeItem = item("Black Theme", #selector(toggleTheme), "t", mods: [])
         themeItem.state = currentTheme == "black" ? .on : .off
         statusMenu.addItem(themeItem)
+
+        let outItem = NSMenuItem(title: "Sound Output", action: nil, keyEquivalent: "")
+        let outMenu = NSMenu(title: "Sound Output")
+        let pref = AudioOutputs.preferredUID
+        let sysItem = item("System Default", #selector(selectOutput(_:)), mods: [])
+        sysItem.representedObject = ""
+        sysItem.state = pref.isEmpty ? .on : .off
+        outMenu.addItem(sysItem)
+        outMenu.addItem(.separator())
+        for dev in AudioOutputs.list() {
+            let it = item(dev.name, #selector(selectOutput(_:)), mods: [])
+            it.representedObject = dev.uid
+            it.state = (dev.uid == pref) ? .on : .off
+            outMenu.addItem(it)
+        }
+        outItem.submenu = outMenu
+        statusMenu.addItem(outItem)
 
         let fsItem = item("Full Screen Visualization", #selector(toggleFullScreenViz), "f", mods: [.command, .control])
         fsItem.state = isFullScreen ? .on : .off

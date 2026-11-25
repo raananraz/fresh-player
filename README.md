@@ -18,6 +18,7 @@ A native macOS music player for MP3 and WAV files that lives in your menu bar, w
 - Repeat off, repeat once, or repeat forever
 - A playlist where you can drop in files and remove songs
 - Open MP3 and WAV files straight from Finder
+- A sound output picker in the player and the menu bar (this changes the Mac’s default sound output)
 
 ## Download
 
